@@ -1,9 +1,10 @@
 from system_tray import SysTrayIcon
 from plyer import notification
+from time import sleep
 from easysettings import load_json_settings
 import zmq
 
-#server_addresses = ["tcp://192.168.1.194:5556", "tcp://192.168.1.194:5556"]
+
 hover_text = "Do Not Disturb Light"
 busy_icon = 'dndon.ico'
 available_icon = 'dndoff.ico'
@@ -32,7 +33,19 @@ def send_color(color, address):
         socket = zmq_context.socket(zmq.REQ)
         socket.connect(address)
         socket.send_string(color)
-        return socket.recv_string() == "Success"
+
+        tries = 0
+        while True:
+            try:
+                resp = socket.recv_string(flags=zmq.NOBLOCK)
+                return resp == "Success"
+            except zmq.Again as e:
+                # No messages received
+                tries += 1
+                if tries > 100:
+                    return False
+                else:
+                    sleep(0.1)
     except:
         return False
 
