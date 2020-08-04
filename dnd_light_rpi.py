@@ -4,9 +4,21 @@ import zmq
 import blinkt
 
 
-def set_light(rgb):
-    blinkt.set_all(rgb[0], rgb[1], rgb[2], 0.1)
-    blinkt.show()
+IDLE_TIME = 3600  # 1 hour
+COLOR_VALS = {'off': (0, 0, 0),
+              'red': (255, 0, 0),
+              'green': (0, 255, 0),
+              'blue': (0, 0, 255)}
+
+
+def set_light(color):
+    if color in COLOR_VALS.keys():
+        rgb = COLOR_VALS[color]
+        blinkt.set_all(rgb[0], rgb[1], rgb[2], 0.1)
+        blinkt.show()
+        return True
+    else:
+        return False
 
 
 def is_worktime(dt: datetime):
@@ -19,41 +31,50 @@ def is_worktime(dt: datetime):
         return False
 
 
-brightness = 0.1
-color_vals = {'off': (0, 0, 0),
-              'red': (255, 0, 0),
-              'green': (0, 255, 0),
-              'blue': (0, 0, 255)}
+def main():
+    if is_worktime(datetime.now()):
+        set_light('green')
+    else:
+        set_light('off')
 
-set_light(color_vals['green'])
+    last_set_time = datetime.now()
+    work_time = is_worktime(datetime.now())
 
-idle_time = 3600 * 2  # 2 hours
-last_set_time = datetime.now()
+    context = zmq.Context()
+    socket = context.socket(zmq.REP)
+    socket.bind("tcp://*:5556")
 
-context = zmq.Context()
-socket = context.socket(zmq.REP)
-socket.bind("tcp://*:5556")
+    while True:
+        prev_work_time = work_time
+        work_time = is_worktime(datetime.now())
+        time_delta = datetime.now() - last_set_time
+        idle = time_delta.total_seconds() > IDLE_TIME
 
-while True:
-    time_delta = datetime.now() - last_set_time
-    if time_delta.total_seconds() > idle_time:
-        if not is_worktime(datetime.now()):
-            print("DND light idle")
-            set_light(color_vals['off'])
+        # Turn light on when work starts
+        if work_time and not prev_work_time and idle:
+            print("Workday started, turning on")
+            set_light('green')
 
-    try:
-        message = socket.recv_string(flags=zmq.NOBLOCK)
+        # Turn light off in off hours
+        if not work_time and idle:
+            print("Off hours and idle, turning off")
+            set_light('off')
 
-        if message in color_vals.keys():
-            set_light(color_vals[message])
-            print("DND light set to {}".format(message))
-            socket.send_string("Success")
-            last_set_time = datetime.now()
-        else:
-            print("{} is not valid".format(message))
-            socket.send_string("Failed")
-    except zmq.Again as e:
-        # No messages received
-        pass
+        try:
+            message = socket.recv_string(flags=zmq.NOBLOCK)
+            if set_light(message):
+                print("DND light set to {}".format(message))
+                socket.send_string("Success")
+                last_set_time = datetime.now()
+            else:
+                print("{} is not valid".format(message))
+                socket.send_string("Failed")
+        except zmq.Again as e:
+            # No messages received
+            pass
 
-    time.sleep(0.1)
+        time.sleep(0.1)
+
+
+if __name__ == '__main__':
+    main()
