@@ -4,11 +4,17 @@ from time import sleep
 from easysettings import load_json_settings
 import zmq
 
+import psutil
+import re
+import threading
+
 
 hover_text = "Do Not Disturb Light"
 busy_icon = 'dndon.ico'
 available_icon = 'dndoff.ico'
 unknown_icon = 'dndunknown.ico'
+monitor_period = 10
+zoom_limit = 440
 zmq_context = zmq.Context()
 
 
@@ -82,8 +88,36 @@ def toggle(SysTrayIcon):
         set_busy(SysTrayIcon)
 
 
+def monitor_zoom():
+    cpu_sum = 0
+    cpu_sum_prev = 0
+
+    while True:
+        # Get Zoom CPU time
+        zoom_cpu = []
+        for proc in psutil.process_iter(['name', 'cpu_times']):
+            if re.search("zoom", proc.info['name'], re.IGNORECASE):
+                zoom_cpu.append(proc.info['cpu_times'].user)
+        cpu_sum_prev = cpu_sum
+        cpu_sum = sum(zoom_cpu)
+
+        # Check if we should set busy
+        if cpu_sum >= zoom_limit > cpu_sum_prev:
+            set_busy()
+
+        # Check if we should set available
+        if cpu_sum < zoom_limit <= cpu_sum_prev:
+            set_available()
+
+        print(sum(zoom_cpu))
+        sleep(monitor_period)
+
+
 if __name__ == '__main__':
+    threading.Thread(target=monitor_zoom).start()
+
     menu_options = (('Toggle', None, toggle),
                     ('Available', available_icon, set_available),
                     ('Busy', busy_icon, set_busy))
     SysTrayIcon(unknown_icon, hover_text, menu_options)
+
