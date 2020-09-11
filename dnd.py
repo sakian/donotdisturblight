@@ -12,7 +12,8 @@ ICON_UNKNOWN = 'dndunknown.ico'
 COLOR_BUSY = 'red'
 COLOR_AVAILABLE = 'green'
 
-zmq_context = zmq.Context()
+zmq_context = None
+zmq_sockets = None
 
 
 def get_light_addresses():
@@ -21,16 +22,26 @@ def get_light_addresses():
     return config['addresses']
 
 
-def notify(icon, msg):
-    icon.notify(msg, title=APP_TITLE)
-    sleep(3)
-    icon.remove_notification()
+def init_connections():
+    # Setup ZMQ context
+    global zmq_context
+    zmq_context = zmq.Context()
+
+    # Setup connections to lights
+    addresses = get_light_addresses()
+    if not addresses:
+        notify("No light addresses configured")
+    else:
+        global zmq_sockets
+        zmq_sockets = []
+        for address in addresses:
+            socket = zmq_context.socket(zmq.REQ)
+            socket.connect(address)
+            zmq_sockets.append(socket)
 
 
-def send_receive_msg(address, msg):
+def send_receive_msg(socket, msg):
     try:
-        socket = zmq_context.socket(zmq.REQ)
-        socket.connect(address)
         socket.send_string(msg)
 
         tries = 0
@@ -49,35 +60,30 @@ def send_receive_msg(address, msg):
 
 
 def is_set_available():
-    # Just get from first address
-    address = get_light_addresses()[0]
-    if not address:
-        notify("No light addresses configured")
-        return ''
-
-    return send_receive_msg(address, 'READ') == COLOR_AVAILABLE
-
-
-def send_all_color(color):
-    addresses = get_light_addresses()
-    if not addresses:
-        notify("No light addresses configured")
+    # Just get status from first light (assume others match)
+    if zmq_sockets:
+        socket = zmq_sockets[0]
+        return send_receive_msg(socket, 'READ') == COLOR_AVAILABLE
+    else:
         return False
 
-    for address in addresses:
-        if send_receive_msg(address, color) != "Success":
-            notify("Failed to set color ({})".format(address))
-            return False
+
+def set_color(color):
+    if zmq_sockets:
+        for socket in zmq_sockets:
+            if send_receive_msg(socket, color) != "Success":
+                notify("Failed to set color ({})".format(socket))
+                return False
     return True
 
 
 def set_busy(icon, item):
-    if send_all_color(COLOR_BUSY):
+    if set_color(COLOR_BUSY):
         icon.icon = Image.open(ICON_BUSY)
 
 
 def set_available(icon, item):
-    if send_all_color(COLOR_AVAILABLE):
+    if set_color(COLOR_AVAILABLE):
         icon.icon = Image.open(ICON_AVAILABLE)
 
 
@@ -92,13 +98,20 @@ def background_task(icon):
     pass
 
 
+def notify(icon, msg):
+    icon.notify(msg, title=APP_TITLE)
+    sleep(3)
+    icon.remove_notification()
+
+
 if __name__ == '__main__':
+    # Setup connections to lights
+    init_connections()
+
     # Get current available status and set icon image
     if is_set_available():
-        print('avail')
         image = Image.open(ICON_AVAILABLE)
     else:
-        print('busy')
         image = Image.open(ICON_BUSY)
 
     # Setup Menu
