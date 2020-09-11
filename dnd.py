@@ -214,6 +214,8 @@ def background_task(icon):
         count = 0
         while count < 60:
             sleep(1)
+            count += 1
+            print(count)
             if stop_app:
                 break
 
