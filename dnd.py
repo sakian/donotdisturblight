@@ -98,8 +98,12 @@ def init_gcal_creds(icon):
         if creds and creds.expired and creds.refresh_token:
             creds.refresh(Request())
         else:
-            flow = InstalledAppFlow.from_client_secrets_file('credentials.json', ['https://www.googleapis.com/auth/calendar.readonly'])
-            creds = flow.run_local_server(port=0)
+            if os.path.exists('credentials.json'):
+                flow = InstalledAppFlow.from_client_secrets_file(
+                    'credentials.json',
+                    ['https://www.googleapis.com/auth/calendar.readonly']
+                )
+                creds = flow.run_local_server(port=0)
 
         with open('token.pickle', 'wb') as token:
             pickle.dump(creds, token)
@@ -178,6 +182,12 @@ def background_task(icon):
     # Setup connections to lights
     init_connections(icon)
 
+    # Get current available status and set icon image
+    if is_set_available():
+        icon.icon = Image.open(ICON_AVAILABLE)
+    else:
+        icon.icon = Image.open(ICON_BUSY)
+
     # Setup Google calendar access
     init_gcal_creds(icon)
 
@@ -189,19 +199,23 @@ def background_task(icon):
 
         prev_on_call = on_call
         on_call, summary = check_if_on_call(icon)
-        print(on_call)
 
         # Check if just joined a call
         if on_call and not prev_on_call:
-            notify(icon, "Starting Call ({})".format(summary))
             set_busy(icon)
+            notify(icon, "Starting Call ({})".format(summary))
 
         # Check if just left a call
         if not on_call and prev_on_call:
-            notify(icon, "Finished Call")
             set_available(icon)
+            notify(icon, "Finished Call")
 
-        sleep(60)
+        # Wait 1 min (but allow app to be killed)
+        count = 0
+        while count < 60:
+            sleep(1)
+            if stop_app:
+                break
 
 
 def notify(icon, msg):
@@ -211,12 +225,6 @@ def notify(icon, msg):
 
 
 if __name__ == '__main__':
-    # Get current available status and set icon image
-    if is_set_available():
-        image = Image.open(ICON_AVAILABLE)
-    else:
-        image = Image.open(ICON_BUSY)
-
     # Setup Menu
     toggle_menu_item = MenuItem('Toggle', toggle, default=True)
     set_available_menu_item = MenuItem('Available', set_available)
@@ -230,6 +238,7 @@ if __name__ == '__main__':
     )
 
     # Start Tray App
+    image = Image.open(ICON_UNKNOWN)
     tray = Icon(APP_TITLE, image, menu=menu)
     tray.visible = True
     tray.run(setup=background_task)
