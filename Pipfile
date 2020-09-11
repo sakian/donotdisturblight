@@ -11,6 +11,8 @@ pyzmq = "*"
 pyinstaller = "*"
 plyer = "*"
 easysettings = "*"
+pystray = "*"
+PIL = "*"
 
 [requires]
-python_version = "3.7"
+python_version = "3.8"

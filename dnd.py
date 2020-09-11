@@ -1,14 +1,17 @@
-from system_tray import SysTrayIcon
-from plyer import notification
+from pystray import Icon, Menu, MenuItem
+from PIL import Image
 from time import sleep
 from easysettings import load_json_settings
 import zmq
 
 
-hover_text = "Do Not Disturb Light"
-busy_icon = 'dndon.ico'
-available_icon = 'dndoff.ico'
-unknown_icon = 'dndunknown.ico'
+APP_TITLE = "Do Not Disturb Light"
+ICON_BUSY = 'dndon.ico'
+ICON_AVAILABLE = 'dndoff.ico'
+ICON_UNKNOWN = 'dndunknown.ico'
+COLOR_BUSY = 'red'
+COLOR_AVAILABLE = 'green'
+
 zmq_context = zmq.Context()
 
 
@@ -18,36 +21,41 @@ def get_light_addresses():
     return config['addresses']
 
 
-def notify(msg):
-    notification.notify(
-        title='Do Not Disturb Light',
-        message=msg,
-        app_name='Do Not Disturb Light',
-        app_icon=busy_icon,
-        timeout=3
-    )
+def notify(icon, msg):
+    icon.notify(msg, title=APP_TITLE)
+    sleep(3)
+    icon.remove_notification()
 
 
-def send_color(color, address):
+def send_receive_msg(address, msg):
     try:
         socket = zmq_context.socket(zmq.REQ)
         socket.connect(address)
-        socket.send_string(color)
+        socket.send_string(msg)
 
         tries = 0
         while True:
             try:
-                resp = socket.recv_string(flags=zmq.NOBLOCK)
-                return resp == "Success"
+                return socket.recv_string(flags=zmq.NOBLOCK)
             except zmq.Again as e:
                 # No messages received
                 tries += 1
                 if tries > 100:
-                    return False
+                    return ''
                 else:
                     sleep(0.1)
     except:
-        return False
+        return ''
+
+
+def is_set_available():
+    # Just get from first address
+    address = get_light_addresses()[0]
+    if not address:
+        notify("No light addresses configured")
+        return ''
+
+    return send_receive_msg(address, 'READ') == COLOR_AVAILABLE
 
 
 def send_all_color(color):
@@ -57,33 +65,53 @@ def send_all_color(color):
         return False
 
     for address in addresses:
-        if not send_color(color, address):
+        if send_receive_msg(address, color) != "Success":
             notify("Failed to set color ({})".format(address))
             return False
     return True
 
 
-def set_busy(SysTrayIcon):
-    if send_all_color('red'):
-        SysTrayIcon.icon = busy_icon
-        SysTrayIcon.refresh_icon()
+def set_busy(icon, item):
+    if send_all_color(COLOR_BUSY):
+        icon.icon = Image.open(ICON_BUSY)
 
 
-def set_available(SysTrayIcon):
-    if send_all_color('green'):
-        SysTrayIcon.icon = available_icon
-        SysTrayIcon.refresh_icon()
+def set_available(icon, item):
+    if send_all_color(COLOR_AVAILABLE):
+        icon.icon = Image.open(ICON_AVAILABLE)
 
 
-def toggle(SysTrayIcon):
-    if SysTrayIcon.icon == busy_icon:
-        set_available(SysTrayIcon)
+def toggle(icon, item):
+    if is_set_available():
+        set_busy(icon, item)
     else:
-        set_busy(SysTrayIcon)
+        set_available(icon, item)
+
+
+def background_task(icon):
+    pass
 
 
 if __name__ == '__main__':
-    menu_options = (('Toggle', None, toggle),
-                    ('Available', available_icon, set_available),
-                    ('Busy', busy_icon, set_busy))
-    SysTrayIcon(unknown_icon, hover_text, menu_options)
+    # Get current available status and set icon image
+    if is_set_available():
+        print('avail')
+        image = Image.open(ICON_AVAILABLE)
+    else:
+        print('busy')
+        image = Image.open(ICON_BUSY)
+
+    # Setup Menu
+    toggle_menu_item = MenuItem('Toggle', toggle, default=True)
+    set_available_menu_item = MenuItem('Available', set_available)
+    set_busy_menu_item = MenuItem('Busy', set_busy)
+    menu = Menu(
+        toggle_menu_item,
+        set_available_menu_item,
+        set_busy_menu_item
+    )
+
+    # Start Tray App
+    tray = Icon(APP_TITLE, image, menu=menu)
+    # tray.run(setup=background_task)
+    tray.run()

@@ -10,12 +10,17 @@ COLOR_VALS = {'off': (0, 0, 0),
               'green': (0, 255, 0),
               'blue': (0, 0, 255)}
 
+current_color = 'off'
+
 
 def set_light(color):
+    global current_color
+
     if color in COLOR_VALS.keys():
         rgb = COLOR_VALS[color]
         blinkt.set_all(rgb[0], rgb[1], rgb[2], 0.1)
         blinkt.show()
+        current_color = color
         return True
     else:
         return False
@@ -62,13 +67,17 @@ def main():
 
         try:
             message = socket.recv_string(flags=zmq.NOBLOCK)
-            if set_light(message):
-                print("DND light set to {}".format(message))
-                socket.send_string("Success")
-                last_set_time = datetime.now()
+            if message == "READ":
+                print("DND light is currently set to {}".format(current_color))
+                socket.send_string(current_color)
             else:
-                print("{} is not valid".format(message))
-                socket.send_string("Failed")
+                if set_light(message):
+                    print("DND light set to {}".format(message))
+                    socket.send_string("Success")
+                    last_set_time = datetime.now()
+                else:
+                    print("{} is not valid".format(message))
+                    socket.send_string("Failed")
         except zmq.Again as e:
             # No messages received
             pass
