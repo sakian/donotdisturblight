@@ -3,6 +3,14 @@ from PIL import Image
 from time import sleep
 from easysettings import load_json_settings
 import zmq
+import os
+import pickle
+from google.auth.transport.requests import Request
+from google_auth_oauthlib.flow import InstalledAppFlow
+from googleapiclient.discovery import build
+from datetime import datetime
+import dateutil.parser
+import re
 
 
 APP_TITLE = "Do Not Disturb Light"
@@ -12,8 +20,10 @@ ICON_UNKNOWN = 'dndunknown.ico'
 COLOR_BUSY = 'red'
 COLOR_AVAILABLE = 'green'
 
+stop_app = False
 zmq_context = None
 zmq_sockets = None
+gcal_service = None
 
 
 def get_light_addresses():
@@ -22,7 +32,7 @@ def get_light_addresses():
     return config['addresses']
 
 
-def init_connections():
+def init_connections(icon):
     # Setup ZMQ context
     global zmq_context
     zmq_context = zmq.Context()
@@ -30,7 +40,7 @@ def init_connections():
     # Setup connections to lights
     addresses = get_light_addresses()
     if not addresses:
-        notify("No light addresses configured")
+        notify(icon, "No light addresses configured")
     else:
         global zmq_sockets
         zmq_sockets = []
@@ -68,34 +78,130 @@ def is_set_available():
         return False
 
 
-def set_color(color):
+def set_color(icon, color):
     if zmq_sockets:
         for socket in zmq_sockets:
             if send_receive_msg(socket, color) != "Success":
-                notify("Failed to set color ({})".format(socket))
+                notify(icon, "Failed to set color ({})".format(socket))
                 return False
     return True
 
 
-def set_busy(icon, item):
-    if set_color(COLOR_BUSY):
+def init_gcal_creds(icon):
+    # Handle google credentials
+    creds = None
+    if os.path.exists('token.pickle'):
+        with open('token.pickle', 'rb') as token:
+            creds = pickle.load(token)
+
+    if not creds or not creds.valid:
+        if creds and creds.expired and creds.refresh_token:
+            creds.refresh(Request())
+        else:
+            flow = InstalledAppFlow.from_client_secrets_file('credentials.json', ['https://www.googleapis.com/auth/calendar.readonly'])
+            creds = flow.run_local_server(port=0)
+
+        with open('token.pickle', 'wb') as token:
+            pickle.dump(creds, token)
+
+    # Set service
+    global gcal_service
+    gcal_service = build('calendar', 'v3', credentials=creds)
+
+
+def check_if_on_call(icon):
+    if gcal_service:
+        # Get next 10 events
+        now = datetime.utcnow().isoformat() + 'Z'  # 'Z' indicates UTC time
+        event_list = gcal_service.events().list(
+            calendarId='primary',
+            timeMin=now,
+            maxResults=10,
+            singleEvents=True,
+            orderBy='startTime'
+        ).execute().get('items', [])
+
+        # Filter to get running events
+        filter_events = []
+        for event in event_list:
+            start_str = event['start'].get('dateTime', event['start'].get('date'))
+            start = dateutil.parser.parse(start_str).replace(tzinfo=None)
+            if start < datetime.now():
+                filter_events.append(event)
+        event_list = filter_events
+
+        # Filter to get only events I accepted
+        event_list = [event for event in event_list if event['status'] == 'confirmed' or event['status'] == 'tentative']
+
+        # Filter to get only events that include a link the the description (assume it's a meeting link)
+        filter_events = []
+        for event in event_list:
+            description = event.get('description', '')
+            urls = re.findall('http[s]?://(?:[a-zA-Z]|[0-9]|[$-_@.&+]|[!*\(\),]|(?:%[0-9a-fA-F][0-9a-fA-F]))+', description)
+            if urls:
+                filter_events.append(event)
+        event_list = filter_events
+
+        # If there are any events not filtered out, we're on a call
+        if event_list:
+            summary = event.get('summary', 'Unnamed Meeting')
+            return True, summary
+
+    # Not on call or couldn't get events
+    return False, ""
+
+
+def set_busy(icon, item=""):
+    if set_color(icon, COLOR_BUSY):
         icon.icon = Image.open(ICON_BUSY)
 
 
-def set_available(icon, item):
-    if set_color(COLOR_AVAILABLE):
+def set_available(icon, item=""):
+    if set_color(icon, COLOR_AVAILABLE):
         icon.icon = Image.open(ICON_AVAILABLE)
 
 
-def toggle(icon, item):
+def toggle(icon, item=""):
     if is_set_available():
         set_busy(icon, item)
     else:
         set_available(icon, item)
 
 
+def exit_app(icon, item=""):
+    global stop_app
+    stop_app = True
+    icon.stop()
+
+
 def background_task(icon):
-    pass
+    # Setup connections to lights
+    init_connections(icon)
+
+    # Setup Google calendar access
+    init_gcal_creds(icon)
+
+    # Check if on call
+    on_call = False
+    while True:
+        if stop_app:
+            break
+
+        prev_on_call = on_call
+        on_call, summary = check_if_on_call(icon)
+        print(on_call)
+
+        # Check if just joined a call
+        if on_call and not prev_on_call:
+            notify(icon, "Starting Call ({})".format(summary))
+            set_busy(icon)
+
+        # Check if just left a call
+        if not on_call and prev_on_call:
+            notify(icon, "Finished Call")
+            set_available(icon)
+
+        sleep(60)
 
 
 def notify(icon, msg):
@@ -105,9 +211,6 @@ def notify(icon, msg):
 
 
 if __name__ == '__main__':
-    # Setup connections to lights
-    init_connections()
-
     # Get current available status and set icon image
     if is_set_available():
         image = Image.open(ICON_AVAILABLE)
@@ -118,13 +221,15 @@ if __name__ == '__main__':
     toggle_menu_item = MenuItem('Toggle', toggle, default=True)
     set_available_menu_item = MenuItem('Available', set_available)
     set_busy_menu_item = MenuItem('Busy', set_busy)
+    exit_menu_item = MenuItem('Exit', exit_app)
     menu = Menu(
         toggle_menu_item,
         set_available_menu_item,
-        set_busy_menu_item
+        set_busy_menu_item,
+        exit_menu_item
     )
 
     # Start Tray App
     tray = Icon(APP_TITLE, image, menu=menu)
-    # tray.run(setup=background_task)
-    tray.run()
+    tray.visible = True
+    tray.run(setup=background_task)
