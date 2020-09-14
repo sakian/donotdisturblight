@@ -8,7 +8,7 @@ import pickle
 from google.auth.transport.requests import Request
 from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.discovery import build
-from datetime import datetime
+from datetime import datetime, timedelta
 import dateutil.parser
 import re
 
@@ -130,7 +130,8 @@ def check_if_on_call(icon):
         for event in event_list:
             start_str = event['start'].get('dateTime', event['start'].get('date'))
             start = dateutil.parser.parse(start_str).replace(tzinfo=None)
-            if start < datetime.now():
+            start_offset = start - datetime.timedelta(0, 5*60)  # Add 5 min buffer to beginning of event
+            if start_offset < datetime.now():
                 filter_events.append(event)
         event_list = filter_events
 
