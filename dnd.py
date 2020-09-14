@@ -19,6 +19,7 @@ ICON_AVAILABLE = 'dndoff.ico'
 ICON_UNKNOWN = 'dndunknown.ico'
 COLOR_BUSY = 'red'
 COLOR_AVAILABLE = 'green'
+START_OFFSET = 5  # Minutes
 
 stop_app = False
 zmq_context = None
@@ -127,10 +128,11 @@ def check_if_on_call(icon):
 
         # Filter to get running events
         filter_events = []
+        print(event_list)
         for event in event_list:
             start_str = event['start'].get('dateTime', event['start'].get('date'))
             start = dateutil.parser.parse(start_str).replace(tzinfo=None)
-            start_offset = start - datetime.timedelta(0, 5*60)  # Add 5 min buffer to beginning of event
+            start_offset = start - timedelta(0, START_OFFSET*60)  # Add buffer to beginning of event
             if start_offset < datetime.now():
                 filter_events.append(event)
         event_list = filter_events
@@ -204,7 +206,7 @@ def background_task(icon):
         # Check if just joined a call
         if on_call and not prev_on_call:
             set_busy(icon)
-            notify(icon, "Starting Call ({})".format(summary))
+            notify(icon, "Starting Call in {} Minutes ({})".format(START_OFFSET, summary))
 
         # Check if just left a call
         if not on_call and prev_on_call:
