@@ -44,11 +44,12 @@ def init_connections(icon):
         notify(icon, "No light addresses configured")
     else:
         global zmq_socket_defs
-        zmq_sockets = []
+        zmq_socket_defs = []
         for address in addresses:
             socket = zmq_context.socket(zmq.REQ)
             socket.connect(address)
-            zmq_sockets.append((socket, address))
+            zmq_socket_defs.append((socket, address))
+            print("Connected to {}".format(address))
 
 
 def reconnect(socket, address):
