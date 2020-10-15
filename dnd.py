@@ -19,11 +19,11 @@ ICON_AVAILABLE = 'dndoff.ico'
 ICON_UNKNOWN = 'dndunknown.ico'
 COLOR_BUSY = 'red'
 COLOR_AVAILABLE = 'green'
-START_OFFSET = 5  # Minutes
+START_OFFSET = 2  # Minutes
 
 stop_app = False
 zmq_context = None
-zmq_sockets = None
+zmq_socket_defs = None
 gcal_service = None
 
 
@@ -43,16 +43,22 @@ def init_connections(icon):
     if not addresses:
         notify(icon, "No light addresses configured")
     else:
-        global zmq_sockets
+        global zmq_socket_defs
         zmq_sockets = []
         for address in addresses:
             socket = zmq_context.socket(zmq.REQ)
             socket.connect(address)
-            zmq_sockets.append(socket)
+            zmq_sockets.append((socket, address))
 
 
-def send_receive_msg(socket, msg):
+def reconnect(socket, address):
+    socket.disconnect(address)
+    socket.connect(address)
+
+
+def send_receive_msg(socket_def, msg):
     try:
+        socket, address = socket_def
         socket.send_string(msg)
 
         tries = 0
@@ -62,6 +68,13 @@ def send_receive_msg(socket, msg):
             except zmq.Again as e:
                 # No messages received
                 tries += 1
+
+                # Try reconnect every 5 retries
+                _, mod = divmod(tries, 5)
+                if mod == 0:
+                    reconnect(socket, address)
+
+                # Eventually give up
                 if tries > 100:
                     return ''
                 else:
@@ -72,18 +85,18 @@ def send_receive_msg(socket, msg):
 
 def is_set_available():
     # Just get status from first light (assume others match)
-    if zmq_sockets:
-        socket = zmq_sockets[0]
-        return send_receive_msg(socket, 'READ') == COLOR_AVAILABLE
+    if zmq_socket_defs:
+        socket_def = zmq_socket_defs[0]
+        return send_receive_msg(socket_def, 'READ') == COLOR_AVAILABLE
     else:
         return False
 
 
 def set_color(icon, color):
-    if zmq_sockets:
-        for socket in zmq_sockets:
-            if send_receive_msg(socket, color) != "Success":
-                notify(icon, "Failed to set color ({})".format(socket))
+    if zmq_socket_defs:
+        for socket_def in zmq_socket_defs:
+            if send_receive_msg(socket_def, color) != "Success":
+                notify(icon, "Failed to set color ({})".format(socket_def[1]))
                 return False
     return True
 
@@ -114,10 +127,11 @@ def init_gcal_creds(icon):
     gcal_service = build('calendar', 'v3', credentials=creds)
 
 
-def check_if_on_call(icon):
+def get_busy_events(icon):
     if gcal_service:
         # Get next 10 events
         now = datetime.utcnow().isoformat() + 'Z'  # 'Z' indicates UTC time
+        now = "2020-10-05T00:00:00Z"
         event_list = gcal_service.events().list(
             calendarId='primary',
             timeMin=now,
@@ -128,7 +142,6 @@ def check_if_on_call(icon):
 
         # Filter to get running events
         filter_events = []
-        print(event_list)
         for event in event_list:
             start_str = event['start'].get('dateTime', event['start'].get('date'))
             start = dateutil.parser.parse(start_str).replace(tzinfo=None)
@@ -140,22 +153,28 @@ def check_if_on_call(icon):
         # Filter to get only events I accepted
         event_list = [event for event in event_list if event['status'] == 'confirmed' or event['status'] == 'tentative']
 
-        # Filter to get only events that include a link the the description (assume it's a meeting link)
+        # Filter to get only events that include a link the the description (assume it's a meeting link) or direct conference link
         filter_events = []
         for event in event_list:
+            # find links in description
             description = event.get('description', '')
             urls = re.findall('http[s]?://(?:[a-zA-Z]|[0-9]|[$-_@.&+]|[!*\(\),]|(?:%[0-9a-fA-F][0-9a-fA-F]))+', description)
-            if urls:
+
+            # Check if conference info exists
+            conference_info = event.get('conferenceData', '')
+
+            if urls or conference_info:
                 filter_events.append(event)
         event_list = filter_events
 
-        # If there are any events not filtered out, we're on a call
-        if event_list:
-            summary = event.get('summary', 'Unnamed Meeting')
-            return True, summary
+        # Return list of events
+        events = []
+        for event in event_list:
+            events.append(event.get('summary', 'Unnamed Meeting'))
+        return events
 
     # Not on call or couldn't get events
-    return False, ""
+    return []
 
 
 def set_busy(icon, item=""):
@@ -195,30 +214,30 @@ def background_task(icon):
     init_gcal_creds(icon)
 
     # Check if on call
-    on_call = False
+    event_list = []
     while True:
         if stop_app:
             break
 
-        prev_on_call = on_call
-        on_call, summary = check_if_on_call(icon)
+        # Check if just started event
+        prev_event_list = event_list
+        event_list = get_busy_events(icon)
+        if event_list != prev_event_list:
+            # Call finished
+            if not event_list and not is_set_available():
+                set_available(icon)
+                notify(icon, "Finished Call (reset to busy if call is still active)")
 
-        # Check if just joined a call
-        if on_call and not prev_on_call:
-            set_busy(icon)
-            notify(icon, "Starting Call in {} Minutes ({})".format(START_OFFSET, summary))
-
-        # Check if just left a call
-        if not on_call and prev_on_call:
-            set_available(icon)
-            notify(icon, "Finished Call")
+            # New call beginning
+            if event_list:
+                set_busy(icon)
+                notify(icon, "Call starts in {} minutes (setting to busy early if not already set)".format(START_OFFSET, event_list[0]))
 
         # Wait 1 min (but allow app to be killed)
         count = 0
         while count < 60:
             sleep(1)
             count += 1
-            print(count)
             if stop_app:
                 break
 
