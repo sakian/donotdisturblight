@@ -131,7 +131,6 @@ def get_busy_events(icon):
     if gcal_service:
         # Get next 10 events
         now = datetime.utcnow().isoformat() + 'Z'  # 'Z' indicates UTC time
-        now = "2020-10-05T00:00:00Z"
         event_list = gcal_service.events().list(
             calendarId='primary',
             timeMin=now,
