@@ -6,13 +6,14 @@ verify_ssl = true
 [dev-packages]
 
 [packages]
-pywin32 = "*"
 pyzmq = "*"
 pyinstaller = "*"
-plyer = "*"
 easysettings = "*"
 pystray = "*"
-PIL = "*"
+google-api-python-client = "*"
+pillow = "*"
+google-auth-oauthlib = "*"
+python-dateutil = "*"
 
 [requires]
 python_version = "3.8"
